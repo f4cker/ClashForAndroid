@@ -10,10 +10,16 @@ properties.load(inputStream)
 
 android {
     signingConfigs {
+        release {
+            storeFile file(properties['keystore.path'])
+            storePassword properties['keystore.password']
+            keyAlias = properties['keystore.alias_release']
+            keyPassword properties['keystore.alias_password']
+        }
         debug {
             storeFile file(properties['keystore.path'])
             storePassword properties['keystore.password']
-            keyAlias = properties['keystore.alias']
+            keyAlias = properties['keystore.alias_debug']
             keyPassword properties['keystore.alias_password']
         }
     }
@@ -27,11 +33,16 @@ android {
         versionName gVersionName
     }
     buildTypes {
+        debug {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
     compileOptions {

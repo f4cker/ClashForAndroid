@@ -54,3 +54,8 @@ google-services.json
 
 # debug
 debug/
+# apk
+*.apk
+
+# debug files
+app/debug/
