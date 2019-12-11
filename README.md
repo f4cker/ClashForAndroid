@@ -35,7 +35,7 @@ See also [PRIVACY_POLICY.md](./PRIVACY_POLICY.md)
    git submodule update --init --recursive
    ```
 
-2. Install `JDK 1.8`, `Android SDK` ,`Android NDK` and `Golang`
+2. Install `JDK 1.8`, `Android SDK`, `Android NDK` and `Golang` *(`Golang` version should be depends on [clash][1] core project version)*
 
 3. Configure `local.properties` 
 
@@ -59,4 +59,6 @@ See also [PRIVACY_POLICY.md](./PRIVACY_POLICY.md)
    .\gradlew.bat build
    ```
 
-   
+  
+  
+  [1]: https://github.com/Dreamacro/clash
