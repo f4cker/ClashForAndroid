@@ -4,9 +4,21 @@ apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-android-extensions'
 apply plugin: 'kotlin-kapt'
 
+def properties = new Properties()
+def inputStream = project.rootProject.file('local.properties').newDataInputStream()
+properties.load(inputStream)
+
 android {
-    compileSdkVersion gCompileSdkVersion
-    buildToolsVersion gBuildToolsVersion
+    signingConfigs {
+        debug {
+            storeFile file(properties['keystore.path'])
+            storePassword properties['keystore.password']
+            keyAlias = properties['keystore.alias']
+            keyPassword properties['keystore.alias_password']
+        }
+    }
+    compileSdkVersion 29
+    buildToolsVersion "29.0.2"
     defaultConfig {
         applicationId "com.github.kr328.clash"
         minSdkVersion gMinSdkVersion
@@ -19,6 +31,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.debug
         }
     }
     compileOptions {
@@ -58,19 +71,6 @@ dependencies {
     implementation "com.microsoft.appcenter:appcenter-crashes:$gAppCenterVersion"
 }
 
-task injectAppCenterKey() {
-    doFirst {
-        Properties properties = new Properties()
-        properties.load(rootProject.file('local.properties').newDataInputStream())
-
-        def key = properties.getProperty("appcenter.key", "")
-
-        android.buildTypes.each {
-            it.buildConfigField 'String', 'APP_CENTER_KEY', "\"$key\""
-        }
-    }
-}
-
-afterEvaluate {
-    preBuild.dependsOn(injectAppCenterKey)
-}
+//afterEvaluate {
+//    preBuild.dependsOn(injectAppCenterKey)
+//}
