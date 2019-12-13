@@ -47,3 +47,9 @@ google-services.json
 
 # Dolphin
 .directory
+
+# DS_Store
+.DS_Store
+
+# debug
+debug/
