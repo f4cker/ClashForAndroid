@@ -1,125 +1,122 @@
 package profile
 
 import (
-	"net"
+	"fmt"
+	"io/ioutil"
 
-	adapters "github.com/Dreamacro/clash/adapters/outbound"
-	"github.com/Dreamacro/clash/component/auth"
-	trie "github.com/Dreamacro/clash/component/domain-trie"
-	"github.com/Dreamacro/clash/component/fakeip"
 	"github.com/Dreamacro/clash/config"
 	"github.com/Dreamacro/clash/constant"
 	"github.com/Dreamacro/clash/dns"
 	"github.com/Dreamacro/clash/hub/executor"
 	"github.com/Dreamacro/clash/log"
-	"github.com/Dreamacro/clash/tunnel"
-
 	"github.com/kr328/cfa/tun"
 )
 
-// LoadDefault - load default configure
-func LoadDefault() {
-	defaultC := &config.Config{
-		General: &config.General{
-			Port:               0,
-			SocksPort:          0,
-			RedirPort:          0,
-			Authentication:     []string{},
-			AllowLan:           false,
-			BindAddress:        "*",
-			Mode:               tunnel.Direct,
-			LogLevel:           log.SILENT,
-			ExternalController: "",
-			ExternalUI:         "",
-			Secret:             "",
-		},
-		DNS: &config.DNS{
-			Enable:     false,
-			IPv6:       false,
-			NameServer: []dns.NameServer{},
-			Fallback:   []dns.NameServer{},
-			FallbackFilter: config.FallbackFilter{
-				GeoIP:  false,
-				IPCIDR: []*net.IPNet{},
-			},
-			Listen:       "",
-			EnhancedMode: dns.NORMAL,
-			FakeIPRange:  nil,
-		},
-		Experimental: &config.Experimental{
-			IgnoreResolveFail: false,
-		},
-		Hosts:   trie.New(),
-		Rules:   []constant.Rule{},
-		Users:   []auth.AuthUser{},
-		Proxies: map[string]constant.Proxy{},
+const tunAddress = "172.31.255.253/30"
+
+const defaultConfig = `
+log: debug
+mode: Direct
+Proxy:
+- name: "broadcast"
+  type: socks5
+  server: 255.255.255.255
+  port: 1080
+
+Proxy Group:
+- name: "select"
+  type: select
+  proxies: [DIRECT]
+
+Rule:
+- 'MATCH,DIRECT'
+`
+
+func init() {
+	defaultNameServers := []string{
+		"223.5.5.5",
+		"119.29.29.29",
+		"1.1.1.1",
+		"208.67.222.222",
 	}
 
-	reject := adapters.NewProxy(adapters.NewReject())
-	direct := adapters.NewProxy(adapters.NewDirect())
-	global, _ := adapters.NewSelector("GLOBAL", []constant.Proxy{direct})
+	OptionalDnsPatch = &config.RawDNS{
+		Enable:     true,
+		IPv6:       true,
+		NameServer: defaultNameServers,
+		Fallback:   []string{},
+		FallbackFilter: config.RawFallbackFilter{
+			GeoIP:  false,
+			IPCIDR: []string{},
+		},
+		Listen:            ":0",
+		EnhancedMode:      dns.FAKEIP,
+		FakeIPRange:       "198.18.0.0/16",
+		FakeIPFilter:      []string{},
+		DefaultNameserver: defaultNameServers,
+	}
+}
 
-	defaultC.Proxies["DIRECT"] = direct
-	defaultC.Proxies["REJECT"] = reject
-	defaultC.Proxies["GLOBAL"] = adapters.NewProxy(global)
+// LoadDefault - load default configure
+func LoadDefault() {
+	defaultC, err := parseConfig([]byte(defaultConfig), constant.Path.HomeDir())
+	if err != nil {
+		log.Warnln("Load Default Failure " + err.Error())
+		return
+	}
 
-	tun.ResetDnsRedirect()
+	DnsPatch = nil
+	NameServersAppend = make([]string, 0)
 
 	executor.ApplyConfig(defaultC, true)
+
+	tun.ResetDnsRedirect()
 }
 
 // LoadFromFile - load file
-func LoadFromFile(path string) error {
-	cfg, err := executor.ParseWithPath(path)
+func LoadFromFile(path, baseDir string) error {
+	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
+	cfg, err := parseConfig(data, baseDir)
+	if err != nil {
+		return err
+	}
+
+	for _, ns := range cfg.DNS.NameServer {
+		log.Infoln("DNS: %s", ns.Addr)
+	}
+
 	executor.ApplyConfig(cfg, true)
-
-	if dns.DefaultResolver == nil && cfg.DNS.Enable {
-		c := cfg.DNS
-
-		r := dns.New(dns.Config{
-			Main:         c.NameServer,
-			Fallback:     c.Fallback,
-			IPv6:         c.IPv6,
-			EnhancedMode: c.EnhancedMode,
-			Pool:         c.FakeIPRange,
-			FallbackFilter: dns.FallbackFilter{
-				GeoIP:  c.FallbackFilter.GeoIP,
-				IPCIDR: c.FallbackFilter.IPCIDR,
-			},
-		})
-
-		dns.DefaultResolver = r
-	}
-
-	if dns.DefaultResolver == nil {
-		_, ipnet, _ := net.ParseCIDR("198.18.0.1/16")
-		pool, _ := fakeip.New(ipnet, 1000)
-
-		var defaultDNSResolver = dns.New(dns.Config{
-			Main: []dns.NameServer{
-				dns.NameServer{Net: "tcp", Addr: "1.1.1.1:53"},
-				dns.NameServer{Net: "tcp", Addr: "208.67.222.222:53"},
-				dns.NameServer{Net: "", Addr: "119.29.29.29:53"},
-				dns.NameServer{Net: "", Addr: "223.5.5.5:53"},
-			},
-			Fallback:     make([]dns.NameServer, 0),
-			IPv6:         true,
-			EnhancedMode: dns.FAKEIP,
-			Pool:         pool,
-			FallbackFilter: dns.FallbackFilter{
-				GeoIP:  false,
-				IPCIDR: make([]*net.IPNet, 0),
-			},
-		})
-
-		dns.DefaultResolver = defaultDNSResolver
-	}
 
 	tun.ResetDnsRedirect()
 
+	log.Infoln("Profile " + path + " loaded")
+
 	return nil
+}
+
+func parseConfig(data []byte, baseDir string) (*config.Config, error) {
+	raw, err := config.UnmarshalRawConfig(data)
+	if err != nil {
+		return nil, err
+	}
+
+	raw.Experimental.Interface = ""
+	raw.ExternalUI = ""
+	raw.ExternalController = ""
+	raw.Rule = append([]string{fmt.Sprintf("IP-CIDR,%s,REJECT,no-resolve", tunAddress)}, raw.Rule...)
+
+	patchRawConfig(raw)
+
+	cfg, err := config.ParseRawConfig(raw, baseDir)
+	if err != nil {
+		return nil, err
+	}
+
+	patchConfig(cfg)
+
+	return cfg, nil
 }

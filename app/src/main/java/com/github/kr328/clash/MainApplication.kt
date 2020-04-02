@@ -2,69 +2,53 @@ package com.github.kr328.clash
 
 import android.app.Application
 import android.content.Context
-import com.crashlytics.android.Crashlytics
-import com.github.kr328.clash.core.Constants
-import com.github.kr328.clash.core.utils.Log
-import com.google.firebase.FirebaseApp
-import io.fabric.sdk.android.Fabric
+import com.github.kr328.clash.core.Global
+import com.github.kr328.clash.dump.LogcatDumper
+import com.github.kr328.clash.remote.Broadcasts
+import com.github.kr328.clash.remote.Remote
+import com.microsoft.appcenter.AppCenter
+import com.microsoft.appcenter.analytics.Analytics
+import com.microsoft.appcenter.crashes.AbstractCrashesListener
+import com.microsoft.appcenter.crashes.Crashes
+import com.microsoft.appcenter.crashes.ingestion.models.ErrorAttachmentLog
+import com.microsoft.appcenter.crashes.model.ErrorReport
 
+@Suppress("unused")
 class MainApplication : Application() {
-    companion object {
-        const val KEY_PROXY_MODE = "key_proxy_mode"
-        const val PROXY_MODE_VPN = "vpn"
-        const val PROXY_MODE_PROXY_ONLY = "proxy_only"
-
-        lateinit var instance: MainApplication
-    }
-
     override fun attachBaseContext(base: Context?) {
         super.attachBaseContext(base)
 
-        instance = this
+        Global.init(this)
     }
 
     override fun onCreate() {
         super.onCreate()
 
-        runCatching {
-            FirebaseApp.initializeApp(this)
-        }
-        runCatching {
-            Fabric.with(this)
-        }
+        // Initialize AppCenter
+        if (BuildConfig.APP_CENTER_KEY.isNotEmpty() && !BuildConfig.DEBUG) {
+            AppCenter.start(
+                this,
+                BuildConfig.APP_CENTER_KEY,
+                Analytics::class.java, Crashes::class.java
+            )
 
-        Log.handler = object: Log.LogHandler {
-            override fun info(message: String, throwable: Throwable?) {
-                android.util.Log.i(Constants.TAG, message, throwable)
-            }
+            Crashes.setListener(object : AbstractCrashesListener() {
+                override fun getErrorAttachments(report: ErrorReport?): MutableIterable<ErrorAttachmentLog> {
+                    report ?: return mutableListOf()
 
-            override fun warn(message: String, throwable: Throwable?) {
-                throwable?.also {
-                    Crashlytics.logException(it)
+                    if (!report.stackTrace.contains("DeadObjectException"))
+                        return mutableListOf()
+
+                    val logcat = LogcatDumper.dump().joinToString(separator = "\n")
+
+                    return mutableListOf(
+                        ErrorAttachmentLog.attachmentWithText(logcat, "logcat.txt")
+                    )
                 }
-
-                android.util.Log.w(Constants.TAG, message, throwable)
-            }
-
-            override fun error(message: String, throwable: Throwable?) {
-                throwable?.also {
-                    Crashlytics.logException(it)
-                }
-
-                android.util.Log.e(Constants.TAG, message, throwable)
-            }
-
-            override fun wtf(message: String, throwable: Throwable?) {
-                throwable?.also {
-                    Crashlytics.logException(it)
-                }
-
-                android.util.Log.wtf(Constants.TAG, message, throwable)
-            }
-
-            override fun debug(message: String, throwable: Throwable?) {
-                android.util.Log.d(Constants.TAG, message, throwable)
-            }
+            })
         }
+
+        Remote.init(this)
+        Broadcasts.init(this)
     }
 }

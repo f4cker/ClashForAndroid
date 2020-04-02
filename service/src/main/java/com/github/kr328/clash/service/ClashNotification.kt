@@ -1,123 +1,128 @@
 package com.github.kr328.clash.service
 
 import android.app.*
-import android.content.ComponentName
 import android.content.Intent
 import android.os.Build
-import android.os.Handler
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import com.github.kr328.clash.core.utils.ByteFormatter
+import com.github.kr328.clash.core.Clash
+import com.github.kr328.clash.core.utils.asBytesString
+import com.github.kr328.clash.core.utils.asSpeedString
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-class ClashNotification(private val context: Service) {
+class ClashNotification(
+    private val context: Service
+) {
     companion object {
         private const val CLASH_STATUS_NOTIFICATION_CHANNEL = "clash_status_channel"
         private const val CLASH_STATUS_NOTIFICATION_ID = 413
-
-        private const val MAIN_ACTIVITY_NAME = ".MainActivity"
     }
 
-    private val handler = Handler()
-    private var showing = false
-
+    private val contentIntent = Intent(Intent.ACTION_MAIN)
+        .addCategory(Intent.CATEGORY_DEFAULT)
+        .addCategory(Intent.CATEGORY_LAUNCHER)
+        .setPackage(context.packageName)
+        .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
     private val baseBuilder = NotificationCompat.Builder(context, CLASH_STATUS_NOTIFICATION_CHANNEL)
-        .setSmallIcon(R.drawable.ic_notification_icon)
+        .setSmallIcon(R.drawable.ic_notification)
         .setOngoing(true)
         .setColor(context.getColor(R.color.colorAccentService))
-        //.setColorized(true)
+        .setOnlyAlertOnce(true)
         .setShowWhen(false)
+        .setGroup(CLASH_STATUS_NOTIFICATION_CHANNEL)
         .setContentIntent(
             PendingIntent.getActivity(
                 context,
-                (Math.random() * 100).toInt(),
-                Intent().setComponent(
-                    ComponentName.createRelative(
-                        context,
-                        MAIN_ACTIVITY_NAME
-                    )
-                ).setFlags(
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                ),
+                CLASH_STATUS_NOTIFICATION_ID,
+                contentIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT
             )
         )
 
-    private var vpn = false
-    private var up = 0L
-    private var down = 0L
-    private var profile = "None"
+    private var currentProfile = "None"
 
     init {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationManagerCompat.from(context)
-                .createNotificationChannel(
-                    NotificationChannel(
-                        CLASH_STATUS_NOTIFICATION_CHANNEL,
-                        context.getString(R.string.clash_service_status_channel),
-                        NotificationManager.IMPORTANCE_MIN
-                    )
-                )
-        }
+        createNotificationChannel()
+
+        updateBase()
     }
 
-    fun show() {
-        handler.post {
-            showing = true
+    fun destroy() {
+        context.stopForeground(true)
 
-            update()
-        }
-    }
-
-    fun cancel() {
-        handler.post {
-            if (showing)
-                context.stopForeground(true)
-
-            showing = false
-        }
+        updateDestroy()
     }
 
     fun setProfile(profile: String) {
-        handler.post {
-            this.profile = profile
-
-            update()
-        }
+        currentProfile = profile
     }
 
-    fun setSpeed(up: Long, down: Long) {
-        handler.post {
-            this.up = up
-            this.down = down
-
-            update()
+    suspend fun update() {
+        val notification = withContext(Dispatchers.Default) {
+            createNotification()
         }
+
+        context.startForeground(CLASH_STATUS_NOTIFICATION_ID, notification)
     }
 
-    fun setVpn(vpn: Boolean) {
-        handler.post {
-            this.vpn = vpn
+    private fun updateBase() {
+        val notification = baseBuilder
+            .setContentTitle(currentProfile)
+            .setContentText(context.getText(R.string.running))
+            .build()
 
-            update()
-        }
+        context.startForeground(CLASH_STATUS_NOTIFICATION_ID, notification)
     }
 
-    private fun update() {
-        if (showing)
-            context.startForeground(CLASH_STATUS_NOTIFICATION_ID, createNotification())
+    private fun updateDestroy() {
+        // just waiting system cancel our notification :)
+        // fxxking google
+
+        val notification = baseBuilder
+            .setContentTitle(context.getText(R.string.destroying))
+            .setContentText(context.getText(R.string.recycling_resources))
+            .setSubText(null)
+            .build()
+
+        NotificationManagerCompat.from(context).apply {
+            notify(CLASH_STATUS_NOTIFICATION_ID, notification)
+            cancel(CLASH_STATUS_NOTIFICATION_ID)
+        }
     }
 
     private fun createNotification(): Notification {
+        val traffic = Clash.queryTraffic()
+        val bandwidth = Clash.queryBandwidth()
+
         return baseBuilder
-            .setContentTitle(profile)
+            .setContentTitle(currentProfile)
             .setContentText(
                 context.getString(
                     R.string.clash_notification_content,
-                    ByteFormatter.byteToStringSecond(up),
-                    ByteFormatter.byteToStringSecond(down)
+                    traffic.upload.asSpeedString(),
+                    traffic.download.asSpeedString()
                 )
             )
-            .setSubText(if (vpn) context.getText(R.string.clash_service_vpn_mode) else null)
+            .setSubText(
+                context.getString(
+                    R.string.clash_notification_content,
+                    bandwidth.upload.asBytesString(),
+                    bandwidth.download.asBytesString()
+                )
+            )
             .build()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O)
+            return
+        NotificationManagerCompat.from(context).createNotificationChannel(
+            NotificationChannel(
+                CLASH_STATUS_NOTIFICATION_CHANNEL,
+                context.getText(R.string.clash_service_status_channel),
+                NotificationManager.IMPORTANCE_LOW
+            )
+        )
     }
 }

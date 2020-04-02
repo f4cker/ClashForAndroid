@@ -3,44 +3,30 @@ package com.github.kr328.clash.utils
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
-import com.github.kr328.clash.ClashStartService
-import com.github.kr328.clash.MainApplication
+import com.github.kr328.clash.preference.UiSettings
 import com.github.kr328.clash.service.ClashService
+import com.github.kr328.clash.service.Intents
 import com.github.kr328.clash.service.TunService
+import com.github.kr328.clash.service.util.intent
+import com.github.kr328.clash.service.util.sendBroadcastSelf
+import com.github.kr328.clash.service.util.startForegroundServiceCompat
 
-object ServiceUtils {
-    fun startProxyService(context: Context): Intent? {
-        context.getSharedPreferences("application", Context.MODE_PRIVATE).apply {
-            when (getString(
-                MainApplication.KEY_PROXY_MODE,
-                MainApplication.PROXY_MODE_VPN
-            )) {
-                MainApplication.PROXY_MODE_VPN -> {
-                    val prepare = VpnService.prepare(context)
+fun Context.startClashService(): Intent? {
+    val startTun = UiSettings(this).get(UiSettings.ENABLE_VPN)
 
-                    if ( prepare != null )
-                        return prepare
+    if (startTun) {
+        val vpnRequest = VpnService.prepare(this)
+        if (vpnRequest != null)
+            return vpnRequest
 
-                    context.startService(Intent(context, TunService::class.java))
-                }
-                MainApplication.PROXY_MODE_PROXY_ONLY -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(Intent(context, ClashService::class.java))
-                    } else {
-                        context.startService(Intent(context, ClashService::class.java))
-                    }
-                }
-            }
-
-            return null
-        }
+        startForegroundServiceCompat(TunService::class.intent)
+    } else {
+        startForegroundServiceCompat(ClashService::class.intent)
     }
 
-    fun startStarterService(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            context.startForegroundService(Intent(context, ClashStartService::class.java))
-        else
-            context.startService(Intent(context, ClashStartService::class.java))
-    }
+    return null
+}
+
+fun Context.stopClashService() {
+    sendBroadcastSelf(Intent(Intents.INTENT_ACTION_REQUEST_STOP))
 }

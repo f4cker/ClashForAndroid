@@ -1,65 +1,61 @@
 package tun
 
 import (
-	"fmt"
 	"strconv"
+	"sync"
 
+	"github.com/Dreamacro/clash/component/resolver"
 	"github.com/Dreamacro/clash/dns"
-	T "github.com/Dreamacro/clash/proxy/tun"
+	"github.com/Dreamacro/clash/log"
+	"github.com/Dreamacro/clash/proxy/tun"
 )
 
-type handler struct {
-	tunAdapter *T.TunAdapter
-}
+var tunInstance *tun.TunAdapter
+var dnsAddress string
+var mutex sync.Mutex
 
-const dnsServerAddress = "172.19.0.2:53"
+func StartTunDevice(fd, mtu int, dns string) error {
+	mutex.Lock()
+	defer mutex.Unlock()
 
-var (
-	dnsHijacking bool = false
-	instance     *handler
-)
+	if tunInstance != nil {
+		return nil
+	}
 
-// StartTunProxy - start
-func StartTunProxy(fd, mtu int) error {
-	StopTunProxy()
-
-	adapter, err := T.NewTunProxy("fd://" + strconv.Itoa(fd) + "?mtu=" + strconv.Itoa(mtu))
+	t, err := tun.NewTunProxy("fd://" + strconv.Itoa(fd) + "?mtu=" + strconv.Itoa(mtu))
 	if err != nil {
 		return err
 	}
 
-	instance = &handler{
-		tunAdapter: &adapter,
-	}
+	tunInstance = &t
+	dnsAddress = dns
 
 	ResetDnsRedirect()
 
-	fmt.Println("Android tun started")
+	log.Infoln("Android tun started")
 
 	return nil
 }
 
-// StopTunProxy - stop
-func StopTunProxy() {
-	if instance != nil {
-		(*instance.tunAdapter).Close()
-		instance = nil
-	}
-}
+func StopTunDevice() {
+	mutex.Lock()
+	defer mutex.Unlock()
 
-func ResetDnsRedirect() {
-	if instance == nil {
+	t := tunInstance
+	if t == nil {
 		return
 	}
 
-	if dnsHijacking {
-		(*instance.tunAdapter).ReCreateDNSServer(dns.DefaultResolver, "0.0.0.0:53")
-	} else {
-		(*instance.tunAdapter).ReCreateDNSServer(dns.DefaultResolver, dnsServerAddress)
-	}
+	(*t).Close()
+	tunInstance = nil
 
+	log.Infoln("Android tun stopped")
 }
 
-func SetDnsHijacking(enabled bool) {
-	dnsHijacking = enabled
+func ResetDnsRedirect() {
+	if tunInstance == nil {
+		return
+	}
+
+	(*tunInstance).ReCreateDNSServer(resolver.DefaultResolver.(*dns.Resolver), dnsAddress)
 }

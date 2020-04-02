@@ -8,15 +8,52 @@
         <service
             android:name="ClashService"
             android:exported="false"
-            android:process=":clash" />
+            android:process=":background" />
         <service
             android:name="TunService"
             android:exported="false"
-            android:process=":clash"
+            android:process=":background"
             android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+        <service
+            android:name=".ClashManagerService"
+            android:exported="false"
+            android:process=":background" />
+        <service
+            android:name=".ProfileService"
+            android:exported="false"
+            android:process=":background" />
+        <service
+            android:name=".ProfileBackgroundService"
+            android:exported="false"
+            android:process=":background" />
+
+        <receiver
+            android:name=".ProfileRequestReceiver"
+            android:exported="false"
+            android:process=":background" />
+
+        <provider
+            android:authorities="${applicationId}.profiles"
+            android:name="androidx.core.content.FileProvider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/profile_provider" />
+        </provider>
+        <provider
+            android:authorities="${applicationId}.status"
+            android:name=".ServiceStatusProvider"
+            android:exported="false"
+            android:process=":background"/>
+        <provider
+            android:authorities="${applicationId}.settings"
+            android:name=".ServiceSettingsProvider"
+            android:exported="false"
+            android:process=":background"/>
     </application>
 </manifest>

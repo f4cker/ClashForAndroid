@@ -1,63 +1,33 @@
 package com.github.kr328.clash.service
 
-import android.app.Service
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
 import android.net.VpnService
-import android.os.*
-import com.github.kr328.clash.core.event.*
+import android.os.Build
+import com.github.kr328.clash.core.Clash
 import com.github.kr328.clash.core.utils.Log
-import com.github.kr328.clash.service.net.DefaultNetworkObserver
+import com.github.kr328.clash.service.net.DefaultNetworkChannel
+import com.github.kr328.clash.service.settings.ServiceSettings
+import com.github.kr328.clash.service.util.asSocketAddressText
+import com.github.kr328.clash.service.util.broadcastNetworkChanged
+import kotlinx.coroutines.*
 
-class TunService : VpnService(), IClashEventObserver {
+class TunService : VpnService(), CoroutineScope by MainScope() {
     companion object {
         // from https://github.com/shadowsocks/shadowsocks-android/blob/master/core/src/main/java/com/github/shadowsocks/bg/VpnService.kt
         private const val VPN_MTU = 1500
-        private const val PRIVATE_VLAN_DNS = "172.19.0.2" // sync with tun/tun.go/dnsServerAddress
-        private const val PRIVATE_VLAN4_CLIENT = "172.19.0.1"
+        private const val PRIVATE_VLAN4_SUBNET = 30
+        private const val PRIVATE_VLAN4_CLIENT = "172.31.255.253"
         private const val PRIVATE_VLAN6_CLIENT = "fdfe:dcba:9876::1"
+        private const val PRIVATE_VLAN_DNS = "172.31.255.254"
+        private const val VLAN4_ANY = "0.0.0.0"
     }
 
-    private var start = true
-    private lateinit var fileDescriptor: ParcelFileDescriptor
-    private lateinit var clash: IClashService
-    private lateinit var defaultNetworkObserver: DefaultNetworkObserver
-    private lateinit var settings: ClashSettingService
-    private val connection = object : ServiceConnection {
-        override fun onServiceDisconnected(name: ComponentName?) {
-            stopSelf()
-        }
+    private var clashCore: ClashCore? = null
 
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            val clash = IClashService.Stub.asInterface(
-                service
-            ) ?: throw NullPointerException()
+    private lateinit var defaultNetworkChannel: DefaultNetworkChannel
+    private lateinit var settings: ServiceSettings
 
-            this@TunService.clash = clash
-
-            start = true
-
-            clash.eventService.registerEventObserver(
-                TunService::class.java.simpleName,
-                this@TunService,
-                intArrayOf()
-            )
-        }
-    }
-
-    override fun onCreate() {
-        super.onCreate()
-
-        if (prepare(this) != null) {
-            stopSelf()
-            return
-        }
-
-        settings = ClashSettingService(this)
-
-        fileDescriptor = Builder()
+    private fun startTun() {
+        val fd = Builder()
             .addAddress()
             .addDnsServer(PRIVATE_VLAN_DNS)
             .addBypassApplications()
@@ -65,58 +35,88 @@ class TunService : VpnService(), IClashEventObserver {
             .setMtu(VPN_MTU)
             .setBlocking(false)
             .setMeteredCompat(false)
-            .establish() ?: throw NullPointerException("Unable to establish VPN")
+            .establish()
+            ?: throw NullPointerException("Unable to create VPN Service")
 
-        bindService(Intent(this, ClashService::class.java), connection, Context.BIND_AUTO_CREATE)
+        val dnsAddress =
+            if (settings.get(ServiceSettings.DNS_HIJACKING))
+                "$VLAN4_ANY:53"
+            else
+                "$PRIVATE_VLAN_DNS:53"
 
-        defaultNetworkObserver = DefaultNetworkObserver(this) {
-            setUnderlyingNetworks(it?.run { arrayOf(it) })
-        }
+        Log.i("TunService.startTun ${fd.fd}")
 
-        defaultNetworkObserver.register()
+        Clash.setDnsOverrideEnabled(settings.get(ServiceSettings.OVERRIDE_DNS))
+
+        Clash.startTunDevice(fd.fd, VPN_MTU, dnsAddress, this::protect, this::stopSelf)
+
+        fd.close()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        super.onStartCommand(intent, flags, startId)
+    override fun onCreate() {
+        super.onCreate()
 
-        return Service.START_NOT_STICKY
+        Clash.initialize(this)
+
+        if (ServiceStatusProvider.serviceRunning)
+            return stopSelf()
+
+        clashCore = ClashCore(this)
+
+        clashCore?.start()
+
+        settings = ServiceSettings(this)
+
+        defaultNetworkChannel = DefaultNetworkChannel(this, this)
+
+        defaultNetworkChannel.register()
+
+        launch {
+            withContext(Dispatchers.IO) {
+                startTun()
+            }
+
+            while (isActive) {
+                val d = defaultNetworkChannel.receive()
+
+                Log.i("Network changed to ${d?.second}")
+
+                if (d == null) {
+                    setUnderlyingNetworks(null)
+                    continue
+                }
+
+                setUnderlyingNetworks(arrayOf(d.first))
+
+                if (settings.get(ServiceSettings.AUTO_ADD_SYSTEM_DNS)) {
+                    withContext(Dispatchers.Default) {
+                        val dnsServers = d.second?.dnsServers ?: emptyList()
+
+                        val dnsStrings = dnsServers.map {
+                            it.asSocketAddressText(53)
+                        }
+
+                        Clash.appendDns(dnsStrings)
+                    }
+                }
+
+                broadcastNetworkChanged(this@TunService)
+            }
+        }
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+        cancel()
 
-        fileDescriptor.close()
+        clashCore?.apply {
+            destroy()
 
-        clash.stopTunDevice()
-        clash.stop()
-
-        clash.eventService.unregisterEventObserver(TunService::class.java.simpleName)
-
-        unbindService(connection)
-
-        defaultNetworkObserver.unregister()
-    }
-
-    override fun onProcessEvent(event: ProcessEvent?) {
-        when (event) {
-            ProcessEvent.STOPPED -> {
-                val startNow = start
-                start = false
-
-                if (startNow)
-                    clash.start()
-                else
-                    stopSelf()
-
-                Log.i("STOPPED")
-            }
-            ProcessEvent.STARTED -> {
-                start = false
-                clash.startTunDevice(fileDescriptor, VPN_MTU, settings.isDnsHijackingEnabled)
-
-                Log.i("STARTED")
-            }
+            defaultNetworkChannel.unregister()
         }
+
+        Log.i("TunService.onDestroy")
+
+        super.onDestroy()
     }
 
     private fun Builder.setMeteredCompat(isMetered: Boolean): Builder {
@@ -126,38 +126,36 @@ class TunService : VpnService(), IClashEventObserver {
     }
 
     private fun Builder.addBypassPrivateRoute(): Builder {
+        val ipv6Support = settings.get(ServiceSettings.IPV6_SUPPORT)
+        val bypassPrivate = settings.get(ServiceSettings.BYPASS_PRIVATE_NETWORK)
+
         // IPv4
-        if ( settings.isBypassPrivateNetwork ) {
+        if (bypassPrivate) {
             resources.getStringArray(R.array.bypass_private_route).forEach {
                 val address = it.split("/")
                 addRoute(address[0], address[1].toInt())
             }
-        }
-        else {
+        } else {
             addRoute("0.0.0.0", 0)
         }
 
         // IPv6
-        if ( settings.isIPv6Enabled ) {
-
-            addRoute("::", 0)
+        if (ipv6Support) {
+            if (bypassPrivate)
+            // from https://github.com/shadowsocks/shadowsocks-android/commit/cc840c9fddb3f4f6677005de18f1fcb387b84064#diff-e089fe63dcb3674c0a1e459a95508e3e
+                addRoute("2000::", 3)
+            else
+                addRoute("::", 0)
         }
 
         return this
     }
 
     private fun Builder.addBypassApplications(): Builder {
-        when ( settings.accessControlMode ) {
-            ClashSettingService.ACCESS_CONTROL_MODE_ALLOW_ALL -> {
-                for ( app in resources.getStringArray(R.array.default_disallow_application) ) {
-                    runCatching {
-                        addDisallowedApplication(app)
-                    }
-                }
-            }
-            ClashSettingService.ACCESS_CONTROL_MODE_ALLOW -> {
-                for ( app in (settings.accessControlApps.toSet() -
-                        resources.getStringArray(R.array.default_disallow_application)) ) {
+        when (settings.get(ServiceSettings.ACCESS_CONTROL_MODE)) {
+            ServiceSettings.ACCESS_CONTROL_MODE_ALL -> {}
+            ServiceSettings.ACCESS_CONTROL_MODE_WHITELIST -> {
+                for (app in settings.get(ServiceSettings.ACCESS_CONTROL_PACKAGES).toSet()) {
                     runCatching {
                         addAllowedApplication(app)
                     }.onFailure {
@@ -165,9 +163,8 @@ class TunService : VpnService(), IClashEventObserver {
                     }
                 }
             }
-            ClashSettingService.ACCESS_CONTROL_MODE_DISALLOW -> {
-                for ( app in (settings.accessControlApps.toSet() +
-                        resources.getStringArray(R.array.default_disallow_application)) ) {
+            ServiceSettings.ACCESS_CONTROL_MODE_BLACKLIST -> {
+                for (app in settings.get(ServiceSettings.ACCESS_CONTROL_PACKAGES).toSet()) {
                     runCatching {
                         addDisallowedApplication(app)
                     }.onFailure {
@@ -175,29 +172,18 @@ class TunService : VpnService(), IClashEventObserver {
                     }
                 }
             }
+            else -> throw IllegalArgumentException("Invalid mode")
         }
 
         return this
     }
 
     private fun Builder.addAddress(): Builder {
-        addAddress(PRIVATE_VLAN4_CLIENT, 30)
+        addAddress(PRIVATE_VLAN4_CLIENT, PRIVATE_VLAN4_SUBNET)
 
-        if ( settings.isIPv6Enabled )
+        if (settings.get(ServiceSettings.IPV6_SUPPORT))
             addAddress(PRIVATE_VLAN6_CLIENT, 126)
 
         return this
-    }
-
-    override fun onSpeedEvent(event: SpeedEvent?) {}
-    override fun onBandwidthEvent(event: BandwidthEvent?) {}
-    override fun onLogEvent(event: LogEvent?) {}
-    override fun onErrorEvent(event: ErrorEvent?) {}
-    override fun onProfileChanged(event: ProfileChangedEvent?) {}
-    override fun onProfileReloaded(event: ProfileReloadEvent?) {}
-    override fun asBinder(): IBinder = object : Binder() {
-        override fun queryLocalInterface(descriptor: String): IInterface? {
-            return this@TunService
-        }
     }
 }

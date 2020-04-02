@@ -3,22 +3,21 @@ apply plugin: 'kotlinx-serialization'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-android-extensions'
 apply plugin: 'kotlin-kapt'
-apply plugin: 'com.google.gms.google-services'
-apply plugin: 'io.fabric'
 
 android {
-    compileSdkVersion 29
-    buildToolsVersion "29.0.2"
+    compileSdkVersion gCompileSdkVersion
+    buildToolsVersion gBuildToolsVersion
     defaultConfig {
         applicationId "com.github.kr328.clash"
-        minSdkVersion 24
-        targetSdkVersion 29
-        versionCode 10016
-        versionName "1.0.16-alpha"
+        minSdkVersion gMinSdkVersion
+        targetSdkVersion gTargetSdkVersion
+        versionCode gVersionCode
+        versionName gVersionName
     }
     buildTypes {
         release {
             minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -29,28 +28,49 @@ android {
     kotlinOptions {
         jvmTarget = "1.8"
     }
+    splits {
+        abi {
+            enable true
+            universalApk true
+        }
+    }
 }
 
 dependencies {
-    kapt "androidx.room:room-compiler:$room_version"
+    kapt "androidx.room:room-compiler:$gRoomVersion"
 
     implementation project(":core")
     implementation project(":service")
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
-    implementation "androidx.lifecycle:lifecycle-livedata:2.1.0"
-    implementation "androidx.lifecycle:lifecycle-common-java8:2.1.0"
-    implementation 'androidx.browser:browser:1.0.0'
-    implementation 'androidx.preference:preference:1.1.0'
-    implementation 'androidx.recyclerview:recyclerview:1.1.0'
-    implementation 'androidx.core:core-ktx:1.2.0-rc01'
-    implementation 'androidx.fragment:fragment-ktx:1.2.0-rc03'
-    implementation 'androidx.appcompat:appcompat:1.1.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.0.0-beta3'
-    implementation "androidx.room:room-runtime:$room_version"
-    implementation "androidx.preference:preference-ktx:1.1.0"
-    implementation "org.jetbrains.kotlinx:kotlinx-serialization-runtime:0.14.0"
-    implementation "com.charleskorn.kaml:kaml:0.14.0"
-    implementation "com.google.android.material:material:1.2.0-alpha02"
-    implementation 'com.google.firebase:firebase-analytics:17.2.1'
-    implementation 'com.crashlytics.sdk.android:crashlytics:2.10.1'
+    implementation project(":design")
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$gKotlinVersion"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$gKotlinCoroutineVersion"
+    implementation "androidx.lifecycle:lifecycle-extensions:$gLifecycleVersion"
+    implementation "androidx.lifecycle:lifecycle-common-java8:$gLifecycleVersion"
+    implementation "androidx.recyclerview:recyclerview:$gRecyclerviewVersion"
+    implementation "androidx.core:core-ktx:$gAndroidKtxVersion"
+    implementation "androidx.appcompat:appcompat:$gAppCompatVersion"
+    implementation "androidx.room:room-runtime:$gRoomVersion"
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-runtime:$gKotlinSerializationVersion"
+    implementation "com.google.android.material:material:$gMaterialDesignVersion"
+    implementation "moe.shizuku.preference:preference-appcompat:$gShizukuPreferenceVersion"
+    implementation "moe.shizuku.preference:preference-simplemenu-appcompat:$gShizukuPreferenceVersion"
+    implementation "com.microsoft.appcenter:appcenter-analytics:$gAppCenterVersion"
+    implementation "com.microsoft.appcenter:appcenter-crashes:$gAppCenterVersion"
+}
+
+task injectAppCenterKey() {
+    doFirst {
+        Properties properties = new Properties()
+        properties.load(rootProject.file('local.properties').newDataInputStream())
+
+        def key = properties.getProperty("appcenter.key", "")
+
+        android.buildTypes.each {
+            it.buildConfigField 'String', 'APP_CENTER_KEY', "\"$key\""
+        }
+    }
+}
+
+afterEvaluate {
+    preBuild.dependsOn(injectAppCenterKey)
 }
