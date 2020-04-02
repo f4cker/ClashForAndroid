@@ -82,6 +82,20 @@ dependencies {
     implementation "com.microsoft.appcenter:appcenter-crashes:$gAppCenterVersion"
 }
 
-//afterEvaluate {
-//    preBuild.dependsOn(injectAppCenterKey)
-//}
+task injectAppCenterKey() {
+    doFirst {
+        Properties keyProperties = new Properties()
+        keyProperties.load(rootProject.file('local.properties').newDataInputStream())
+
+        def key = keyProperties.getProperty("appcenter.key", "")
+
+        android.buildTypes.each {
+            it.buildConfigField 'String', 'APP_CENTER_KEY', "\"$key\""
+        }
+    }
+}
+
+
+afterEvaluate {
+    preBuild.dependsOn(injectAppCenterKey)
+}
